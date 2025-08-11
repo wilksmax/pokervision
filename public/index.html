@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poker Table Vision · MVP</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <h1>📷 Poker Table Vision</h1>
+    <p>Upload a poker table screenshot to extract stacks/positions/pot/actions and get next-action recommendations.</p>
+
+    <form id="upload-form">
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/*" hidden />
+        <span>Drop image here or click to choose</span>
+      </label>
+      <button id="analyze" type="button">Analyze</button>
+    </form>
+
+    <div id="preview"></div>
+
+    <section id="results" class="hidden">
+      <h2>Results</h2>
+      <pre id="state"></pre>
+      <div id="advice"></div>
+    </section>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>

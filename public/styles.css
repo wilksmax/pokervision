@@ -1,0 +1,15 @@
+:root { --bg:#0b0f14; --fg:#e9eef5; --muted:#9cb0c2; --card:#121821; --accent:#ff7a00; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,Segoe UI,Roboto,Ubuntu}
+main{max-width:900px;margin:48px auto;padding:0 20px}
+h1{font-weight:800;letter-spacing:.2px}
+.drop{display:block;border:2px dashed #2a3340;border-radius:14px;padding:32px;text-align:center;cursor:pointer;transition:.2s}
+.drop:hover,.drop.hover{border-color:var(--accent);background:#141b24}
+#preview img{max-width:100%;margin:16px 0;border-radius:12px}
+button{background:var(--accent);color:#000;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}
+.hidden{display:none}
+pre{background:var(--card);padding:16px;border-radius:12px;overflow:auto}
+.card{background:linear-gradient(180deg,#121821,#0f151d);border:1px solid #202b37;padding:16px;border-radius:14px}
+.card h3{margin-top:0}
+.notes{color:var(--muted)}
+.error{color:#ffb4b4}
