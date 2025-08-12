@@ -1,10 +1,15 @@
 // functions/api/analyze.js
 //
 // Cloudflare Pages Function:
-// - gpt-4o with json_schema via text.format for strict extraction
-// - uses input_image (data URL)  ✅
-// - self-check correction pass on gpt-4o-mini
-// - robust output parsing for Responses API
+// - Strict extraction via text.format json_schema (gpt-4o)
+// - Loose fallback (no schema) if strict fails
+// - Deterministic corrections (street from board length, numeric coercions)
+// - Self-check correction (gpt-4o-mini)
+// - Robust Responses API parsing
+//
+// Set environment variables in Cloudflare Pages:
+//   OPENAI_API_KEY = your key
+//   STRICT_MODE    = "true" | "false"  (optional; defaults to "true")
 
 // ---------- helpers ----------
 function parseJsonLoose(s) {
@@ -37,7 +42,40 @@ function getOutputText(obj) {
   return out.join('\n').trim();
 }
 
-// ---------- strict JSON schema (UPDATED) ----------
+// Deterministic corrections (safe, non-creative)
+function enforceDeterministicCorrections(s) {
+  try {
+    const board = Array.isArray(s?.table?.board) ? s.table.board.filter(Boolean) : [];
+    const streetByLen = { 0: 'preflop', 3: 'flop', 4: 'turn', 5: 'river' }[board.length];
+    if (streetByLen && s.table) s.table.street = streetByLen;
+
+    // number coercions
+    if (s?.table?.pot != null) s.table.pot = Number(s.table.pot);
+    if (s?.table?.minRaise != null) s.table.minRaise = (s.table.minRaise===null?null:Number(s.table.minRaise));
+    if (s?.table?.maxBet != null) s.table.maxBet = (s.table.maxBet===null?null:Number(s.table.maxBet));
+    if (s?.table?.stakes?.sb != null) s.table.stakes.sb = Number(s.table.stakes.sb);
+    if (s?.table?.stakes?.bb != null) s.table.stakes.bb = Number(s.table.stakes.bb);
+    if (s?.hero?.stack != null) s.hero.stack = Number(s.hero.stack);
+    if (s?.hero?.committedThisStreet != null) s.hero.committedThisStreet = (s.hero.committedThisStreet===null?null:Number(s.hero.committedThisStreet));
+    if (!Array.isArray(s?.hero?.hole)) s.hero.hole = [];
+
+    if (Array.isArray(s?.players)) {
+      s.players = s.players.map(p => ({
+        ...p,
+        seat: p.seat == null ? null : Number(p.seat),
+        stack: p.stack == null ? null : Number(p.stack),
+        committedThisStreet: p.committedThisStreet == null ? null : Number(p.committedThisStreet),
+        position: p.position ?? null,
+        inHand: !!p.inHand
+      }));
+    }
+  } catch {
+    // ignore
+  }
+  return s;
+}
+
+// ---------- strict JSON schema ----------
 const TableStateSchema = {
   name: "TableState",
   schema: {
@@ -56,15 +94,14 @@ const TableStateSchema = {
               sb: { type: "number" },
               bb: { type: "number" }
             },
-            required: ["sb", "bb"] // all keys in stakes
+            required: ["sb", "bb"]
           },
           minRaise: { type: ["number", "null"] },
-          maxBet: { type: ["number", "null"] },
-          pot: { type: "number" },
-          board: { type: "array", items: { type: "string" } },
-          street: { enum: ["preflop", "flop", "turn", "river"] }
+          maxBet:   { type: ["number", "null"] },
+          pot:      { type: "number" },
+          board:    { type: "array", items: { type: "string" } },
+          street:   { enum: ["preflop", "flop", "turn", "river"] }
         },
-        // ✅ required must include EVERY key in properties
         required: ["game", "stakes", "minRaise", "maxBet", "pot", "board", "street"]
       },
 
@@ -75,11 +112,10 @@ const TableStateSchema = {
           seat: { type: ["integer", "null"] },
           position: { type: ["string", "null"] },
           stack: { type: ["number", "null"] },
-          hole: { type: "array", items: { type: "string" } },
+          hole:  { type: "array", items: { type: "string" } },
           toAct: { type: "boolean" },
           committedThisStreet: { type: ["number", "null"] }
         },
-        // ✅ include all keys
         required: ["seat", "position", "stack", "hole", "toAct", "committedThisStreet"]
       },
 
@@ -95,34 +131,88 @@ const TableStateSchema = {
             committedThisStreet: { type: ["number", "null"] },
             inHand: { type: "boolean" }
           },
-          // ✅ include all keys
           required: ["seat", "position", "stack", "committedThisStreet", "inHand"]
         }
       },
 
-      // Keep actionHistory flexible (no properties enforced); strict top-level still applies
-      actionHistory: { type: "array", items: { type: "object" } }
+      actionHistory: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            actor:  { type: "string" },                                // e.g., "BTN" or player name
+            action: { enum: ["fold", "check", "call", "bet", "raise"] },
+            size:   { type: ["number", "null"] },                       // in BB if known
+            street: { enum: ["preflop", "flop", "turn", "river"] }
+          },
+          required: ["actor", "action", "size", "street"]
+        }
+      }
     },
-    // ✅ include all top-level keys
     required: ["table", "hero", "players", "actionHistory"]
   },
   strict: true
 };
 
-// Build the format object the Responses API expects
+// Build the format expected by Responses API at text.format
 const JSON_SCHEMA_FORMAT = {
   type: 'json_schema',
-  name: 'TableState',                    // required at text.format.name
-  schema: TableStateSchema.schema,       // the schema body above
+  name: 'TableState',
+  schema: TableStateSchema.schema,
   strict: true
 };
 
+// ---------- fallback (no schema) ----------
+async function extractLoose(env, dataUrl) {
+  const req = {
+    model: 'gpt-4o',
+    temperature: 0,
+    input: [
+      {
+        role: 'system',
+        content: [{
+          type: 'input_text',
+          text:
+`Return ONLY valid JSON (no code fences) that matches this shape (keys/types only):
+${JSON.stringify(TableStateSchema.schema, null, 2)}
+Rules:
+- Convert amounts to BB if displayed as BB.
+- Use null for unreadable fields; never invent.
+- Street must match board length: 0=preflop, 3=flop, 4=turn, 5=river.`
+        }]
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'Extract table state JSON from this screenshot.' },
+          { type: 'input_image', image_url: dataUrl }
+        ]
+      }
+    ]
+  };
 
+  const r = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(req)
+  });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const raw = getOutputText(j);
+  if (!raw) return null;
+  try { return parseJsonLoose(raw); } catch { return null; }
+}
 
 // ---------- function entry ----------
 export async function onRequestPost(context) {
   try {
-    const { env, request } = context; // Set OPENAI_API_KEY in Pages → Settings → Environment variables
+    const { env, request } = context;
+    const strictMode = (env.STRICT_MODE ?? 'true').toLowerCase() !== 'false';
+
     const form = await request.formData();
     const file = form.get('image');
     if (!file) {
@@ -137,18 +227,22 @@ export async function onRequestPost(context) {
     const b64 = btoa(binary);
     const dataUrl = `data:${file.type};base64,${b64}`;
 
-    // ---------- 1) Vision extraction (STRICT with schema via text.format) ----------
-    const extractionReq = {
-      model: 'gpt-4o',
-      temperature: 0,
-      text: { format: JSON_SCHEMA_FORMAT },   // 👈 replace previous format
-      input: [
-        {
-          role: 'system',
-          content: [
-            {
-              type: 'input_text',
-              text:
+    let state = null;
+    let strictErrorText = null;
+
+    // ---------- 1) Strict extraction (json_schema via text.format) ----------
+    if (strictMode) {
+      const extractionReq = {
+        model: 'gpt-4o',
+        temperature: 0,
+        text: { format: JSON_SCHEMA_FORMAT },
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'input_text',
+                text:
 `You read poker client screenshots (WSOP/GG skin). Return ONLY JSON that matches the provided schema.
 Skin rules:
 - The pot text appears as "Total Pot : X BB".
@@ -157,61 +251,70 @@ Skin rules:
 - Use null for anything unreadable—never invent values.
 - Convert bets to BB when shown as BB.
 - Do NOT wrap JSON in code fences.`
-            }
-          ]
+              }
+            ]
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Extract structured table state from this screenshot.' },
+              { type: 'input_image', image_url: dataUrl }
+            ]
+          }
+        ]
+      };
+
+      const exRes = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
         },
-        {
-          role: 'user',
-          content: [
-            { type: 'input_text', text: 'Extract structured table state from this screenshot.' },
-            { type: 'input_image', image_url: dataUrl } // ✅ use input_image (string data URL)
-          ]
+        body: JSON.stringify(extractionReq)
+      });
+
+      if (exRes.ok) {
+        const exJson = await exRes.json();
+        state = exJson.output_parsed;
+        if (!state) {
+          const raw = getOutputText(exJson);
+          if (raw) { try { state = parseJsonLoose(raw); } catch {} }
         }
-      ]
-    };
-
-    const exRes = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(extractionReq)
-    });
-
-    if (!exRes.ok) {
-      const errText = await exRes.text();
-      return new Response(JSON.stringify({ error: 'OpenAI extraction error', details: errText }), { status: 500 });
+      } else {
+        strictErrorText = await exRes.text();
+      }
     }
 
-    const exJson = await exRes.json();
-
-    // Prefer structured output when using json_schema format
-    let state = exJson.output_parsed;
+    // ---------- 1b) Loose fallback if needed ----------
     if (!state) {
-      const raw = getOutputText(exJson);
-      if (!raw) return new Response(JSON.stringify({ error: 'Failed to parse JSON from vision output', raw }), { status: 422 });
-      state = parseJsonLoose(raw);
+      const loose = await extractLoose(env, dataUrl);
+      state = loose;
+      if (!state) {
+        return new Response(JSON.stringify({
+          error: 'OpenAI extraction error',
+          details: strictErrorText || 'Strict & loose extraction failed'
+        }), { status: 500 });
+      }
     }
 
-    if (!state?.table || !state?.hero || !Array.isArray(state?.players)) {
-      return new Response(JSON.stringify({ error: 'Incomplete extraction', state }), { status: 422 });
-    }
+    // ---------- 1c) Deterministic corrections ----------
+    state = enforceDeterministicCorrections(state);
 
-    // ---------- 1b) Self-check / correction pass (also uses json_schema via text.format) ----------
+    // ---------- 1d) Self-check / correction pass ----------
     const correctionReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
-      text: { format: JSON_SCHEMA_FORMAT },   // 👈 replace previous format
+      text: { format: JSON_SCHEMA_FORMAT },
       input: [
         { role: 'system', content: [
           { type: 'input_text', text:
 `Validate and correct this TableState:
-- Pot (BB) must match the visible "Total Pot" text in the screenshot when present.
+- Pot (BB) must match the visible "Total Pot" text in the screenshot when present (quote it to yourself; then set table.pot).
+- Street must match board length: 0=preflop, 3=flop, 4=turn, 5=river.
 - "inHand" true only for seats with action halo or chips in front on this street.
-- Street must match board cards: 0=preflop, 3=flop, 4=turn, 5=river.
-- If positions conflict with the dealer button, fix positions.
-Return corrected JSON only.` }
+- If positions conflict with the dealer button "D", fix positions by rotating from the button.
+Return corrected JSON only.`
+          }
         ]},
         { role: 'user', content: [
           { type: 'input_text', text: JSON.stringify(state) }
@@ -234,10 +337,10 @@ Return corrected JSON only.` }
         const t = getOutputText(corrJson);
         return t ? parseJsonLoose(t) : null;
       })();
-      if (correctedState) state = correctedState;
+      if (correctedState) state = enforceDeterministicCorrections(correctedState);
     }
 
-    // ---------- 2) Strategy recommendation (textual JSON, no schema needed) ----------
+    // ---------- 2) Strategy recommendation ----------
     const strategyReq = {
       model: 'gpt-4o-mini',
       temperature: 0,

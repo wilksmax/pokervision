@@ -1,3 +1,4 @@
+// public/script.js
 const fileInput = document.getElementById('file');
 const drop = document.getElementById('drop');
 const analyzeBtn = document.getElementById('analyze');
@@ -13,23 +14,46 @@ function showPreview(file) {
   preview.innerHTML = `<img src="${url}" alt="preview" />`;
 }
 
-drop.addEventListener('click', () => fileInput.click());
+// Downscale oversized images to max width
+async function downscaleImage(file, maxW = 1600, quality = 0.9) {
+  if (!file.type.startsWith('image/')) return file;
+  const img = document.createElement('img');
+  const url = URL.createObjectURL(file);
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  const scale = Math.min(1, maxW / img.naturalWidth);
+  if (scale >= 1) return file;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const mime = file.type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+  const blob = await new Promise(r => canvas.toBlob(r, mime, quality));
+  return new File([blob], file.name.replace(/\.(png|jpg|jpeg|webp)$/i, '') + (mime==='image/webp'?'.webp':'.jpg'), { type: mime });
+}
 
-drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
-drop.addEventListener('drop', (e) => {
+drop?.addEventListener('click', () => fileInput.click());
+drop?.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
+drop?.addEventListener('dragleave', () => drop.classList.remove('hover'));
+drop?.addEventListener('drop', async (e) => {
   e.preventDefault();
   drop.classList.remove('hover');
   const f = e.dataTransfer.files?.[0];
-  if (f) { selectedFile = f; showPreview(f); }
+  if (f) {
+    selectedFile = await downscaleImage(f);
+    showPreview(selectedFile);
+  }
 });
 
-fileInput.addEventListener('change', () => {
+fileInput?.addEventListener('change', async () => {
   const f = fileInput.files?.[0];
-  if (f) { selectedFile = f; showPreview(f); }
+  if (f) {
+    selectedFile = await downscaleImage(f);
+    showPreview(selectedFile);
+  }
 });
 
-analyzeBtn.addEventListener('click', async () => {
+analyzeBtn?.addEventListener('click', async () => {
   if (!selectedFile) {
     alert('Please choose an image first.');
     return;
@@ -44,7 +68,6 @@ analyzeBtn.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/analyze', { method: 'POST', body: fd });
     const data = await res.json();
-
     if (!res.ok) {
       stateEl.textContent = JSON.stringify(data, null, 2);
       adviceEl.innerHTML = '<p class="error">Extraction failed. See details above.</p>';
