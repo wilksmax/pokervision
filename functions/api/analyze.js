@@ -98,6 +98,15 @@ const TableStateSchema = {
   strict: true
 };
 
+// Build the format object the Responses API expects
+const JSON_SCHEMA_FORMAT = {
+  type: 'json_schema',
+  name: 'TableState',              // 👈 required at text.format.name
+  schema: TableStateSchema.schema, // reuse your schema body
+  strict: true
+};
+
+
 // ---------- function entry ----------
 export async function onRequestPost(context) {
   try {
@@ -120,7 +129,7 @@ export async function onRequestPost(context) {
     const extractionReq = {
       model: 'gpt-4o',
       temperature: 0,
-      text: { format: { type: 'json_schema', json_schema: TableStateSchema } },
+      text: { format: JSON_SCHEMA_FORMAT },   // 👈 replace previous format
       input: [
         {
           role: 'system',
@@ -181,7 +190,7 @@ Skin rules:
     const correctionReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
-      text: { format: { type: 'json_schema', json_schema: TableStateSchema } },
+      text: { format: JSON_SCHEMA_FORMAT },   // 👈 replace previous format
       input: [
         { role: 'system', content: [
           { type: 'input_text', text:
