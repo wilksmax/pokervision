@@ -1,19 +1,34 @@
 // functions/api/analyze.js
 
-// Loose JSON parser to handle occasional ```json fences
+// ---- helpers ----
 function parseJsonLoose(s) {
   if (!s || typeof s !== 'string') throw new Error('Empty response');
   let t = s.trim();
-  if (t.startsWith('```')) {
-    t = t.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim();
-  } else {
-    t = t.replace(/```/g, '').trim();
-  }
+  if (t.startsWith('```')) t = t.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim();
+  else t = t.replace(/```/g, '').trim();
   try { return JSON.parse(t); } catch {
-    const start = t.indexOf('{'); const end = t.lastIndexOf('}');
-    if (start !== -1 && end > start) return JSON.parse(t.slice(start, end + 1));
+    const a = t.indexOf('{'), b = t.lastIndexOf('}');
+    if (a !== -1 && b > a) return JSON.parse(t.slice(a, b + 1));
     throw new Error('Could not parse JSON');
   }
+}
+
+// Robustly pull text from Responses API payloads
+function getOutputText(obj) {
+  if (obj?.output_text && obj.output_text.trim()) return obj.output_text.trim();
+  const out = [];
+  const arr = obj?.output;
+  if (Array.isArray(arr)) {
+    for (const msg of arr) {
+      const content = msg?.content;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (typeof part?.text === 'string' && part.text.trim()) out.push(part.text.trim());
+        }
+      }
+    }
+  }
+  return out.join('\n').trim();
 }
 
 const TABLE_STATE_JSON_EXAMPLE = {
@@ -46,14 +61,14 @@ const TABLE_STATE_JSON_EXAMPLE = {
 
 export async function onRequestPost(context) {
   try {
-    const { env, request } = context; // OPENAI_API_KEY lives in env
+    const { env, request } = context; // OPENAI_API_KEY in env
     const form = await request.formData();
     const file = form.get('image');
     if (!file) {
       return new Response(JSON.stringify({ error: 'No image uploaded' }), { status: 400 });
     }
 
-    // Blob -> base64 data URL
+    // Blob -> data URL
     const buf = await file.arrayBuffer();
     let binary = '';
     const bytes = new Uint8Array(buf);
@@ -61,7 +76,7 @@ export async function onRequestPost(context) {
     const b64 = btoa(binary);
     const dataUrl = `data:${file.type};base64,${b64}`;
 
-    // --- 1) Vision extraction (Responses API) ---
+    // ---------- 1) Vision extraction ----------
     const extractionReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
@@ -78,7 +93,7 @@ export async function onRequestPost(context) {
 - Use null for unreadable fields; never invent values.
 - "committedThisStreet" is per CURRENT street only.
 - "actionHistory" is chronological; sizes in BB if blinds are known.
-- Do NOT wrap the JSON in code fences. Output JSON only.`
+- Do NOT wrap JSON in code fences. Output JSON only.`
             }
           ]
         },
@@ -107,7 +122,11 @@ export async function onRequestPost(context) {
     }
 
     const exJson = await exRes.json();
-    const raw = exJson.output_text || '';
+    const raw = getOutputText(exJson); // <-- robust extraction
+    if (!raw) {
+      return new Response(JSON.stringify({ error: 'Failed to parse JSON from vision output', raw }), { status: 422 });
+    }
+
     let state;
     try { state = parseJsonLoose(raw); }
     catch { return new Response(JSON.stringify({ error: 'Failed to parse JSON from vision output', raw }), { status: 422 }); }
@@ -116,7 +135,7 @@ export async function onRequestPost(context) {
       return new Response(JSON.stringify({ error: 'Incomplete extraction', state }), { status: 422 });
     }
 
-    // --- 2) Strategy recommendation ---
+    // ---------- 2) Strategy recommendation ----------
     const strategyReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
@@ -134,7 +153,7 @@ Rules:
 - If bet/raise, include explicit size: BB if blinds known; else 0.33x/0.5x/0.66x pot.
 - Cite numbers from the state in notes.
 - If key fields are null, give a safe default and flag uncertainty.
-- Do NOT wrap the JSON in code fences. Output JSON only.`
+- Do NOT wrap JSON in code fences. Output JSON only.`
             }
           ]
         },
@@ -163,7 +182,11 @@ Rules:
     }
 
     const stJson = await stRes.json();
-    const stratRaw = stJson.output_text || '';
+    const stratRaw = getOutputText(stJson); // <-- robust extraction
+    if (!stratRaw) {
+      return new Response(JSON.stringify({ error: 'Failed to parse strategy JSON', stratRaw, state }), { status: 422 });
+    }
+
     let rec;
     try { rec = parseJsonLoose(stratRaw); }
     catch { return new Response(JSON.stringify({ error: 'Failed to parse strategy JSON', stratRaw, state }), { status: 422 }); }
