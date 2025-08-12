@@ -1,10 +1,10 @@
 // functions/api/analyze.js
 //
 // Cloudflare Pages Function:
-// - Uses gpt-4o with json_schema via text.format for strict extraction
-// - Uses "computer_screenshot" modality
-// - Self-check correction pass on gpt-4o-mini
-// - Robust output parsing for Responses API
+// - gpt-4o with json_schema via text.format for strict extraction
+// - uses input_image (data URL)  ✅
+// - self-check correction pass on gpt-4o-mini
+// - robust output parsing for Responses API
 
 // ---------- helpers ----------
 function parseJsonLoose(s) {
@@ -143,7 +143,7 @@ Skin rules:
           role: 'user',
           content: [
             { type: 'input_text', text: 'Extract structured table state from this screenshot.' },
-            { type: 'computer_screenshot', image_url: dataUrl }
+            { type: 'input_image', image_url: dataUrl } // ✅ use input_image (string data URL)
           ]
         }
       ]
