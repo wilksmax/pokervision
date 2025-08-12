@@ -6,6 +6,68 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 
+// JSON Schema for table state extraction
+const TableStateSchema = {
+  name: "TableState",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      table: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          game: { type: "string" },
+          stakes: {
+            type: "object",
+            additionalProperties: false,
+            properties: { sb: { type: "number" }, bb: { type: "number" } },
+            required: ["sb","bb"]
+          },
+          minRaise: { type: ["number","null"] },
+          maxBet:   { type: ["number","null"] },
+          pot:      { type: "number" },
+          board:    { type: "array", items: { type:"string" } },
+          street:   { enum: ["preflop","flop","turn","river"] }
+        },
+        required: ["game","stakes","pot","board","street"]
+      },
+      hero: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          seat: { type: ["integer","null"] },
+          position: { type: ["string","null"] },
+          stack: { type: ["number","null"] },
+          hole:  { type: "array", items: { type:"string" } },
+          toAct: { type: "boolean" },
+          committedThisStreet: { type: ["number","null"] }
+        },
+        required: ["stack","hole","toAct"]
+      },
+      players: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            seat: { type: ["integer","null"] },
+            position: { type: ["string","null"] },
+            stack: { type: ["number","null"] },
+            committedThisStreet: { type: ["number","null"] },
+            inHand: { type: "boolean" }
+          },
+          required: ["stack","inHand"]
+        }
+      },
+      actionHistory: { type: "array", items: { type: "object" } }
+    },
+    required: ["table","hero","players","actionHistory"]
+  },
+  strict: true
+};
+
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
