@@ -37,7 +37,7 @@ function getOutputText(obj) {
   return out.join('\n').trim();
 }
 
-// ---------- strict JSON schema ----------
+// ---------- strict JSON schema (UPDATED) ----------
 const TableStateSchema = {
   name: "TableState",
   schema: {
@@ -52,48 +52,59 @@ const TableStateSchema = {
           stakes: {
             type: "object",
             additionalProperties: false,
-            properties: { sb: { type: "number" }, bb: { type: "number" } },
-            required: ["sb","bb"]
+            properties: {
+              sb: { type: "number" },
+              bb: { type: "number" }
+            },
+            required: ["sb", "bb"] // all keys in stakes
           },
-          minRaise: { type: ["number","null"] },
-          maxBet:   { type: ["number","null"] },
-          pot:      { type: "number" },
-          board:    { type: "array", items: { type:"string" } },
-          street:   { enum: ["preflop","flop","turn","river"] }
+          minRaise: { type: ["number", "null"] },
+          maxBet: { type: ["number", "null"] },
+          pot: { type: "number" },
+          board: { type: "array", items: { type: "string" } },
+          street: { enum: ["preflop", "flop", "turn", "river"] }
         },
-        required: ["game","stakes","pot","board","street"]
+        // ✅ required must include EVERY key in properties
+        required: ["game", "stakes", "minRaise", "maxBet", "pot", "board", "street"]
       },
+
       hero: {
         type: "object",
         additionalProperties: false,
         properties: {
-          seat: { type: ["integer","null"] },
-          position: { type: ["string","null"] },
-          stack: { type: ["number","null"] },
-          hole:  { type: "array", items: { type:"string" } },
+          seat: { type: ["integer", "null"] },
+          position: { type: ["string", "null"] },
+          stack: { type: ["number", "null"] },
+          hole: { type: "array", items: { type: "string" } },
           toAct: { type: "boolean" },
-          committedThisStreet: { type: ["number","null"] }
+          committedThisStreet: { type: ["number", "null"] }
         },
-        required: ["stack","hole","toAct"]
+        // ✅ include all keys
+        required: ["seat", "position", "stack", "hole", "toAct", "committedThisStreet"]
       },
+
       players: {
         type: "array",
         items: {
           type: "object",
           additionalProperties: false,
           properties: {
-            seat: { type: ["integer","null"] },
-            position: { type: ["string","null"] },
-            stack: { type: ["number","null"] },
-            committedThisStreet: { type: ["number","null"] },
+            seat: { type: ["integer", "null"] },
+            position: { type: ["string", "null"] },
+            stack: { type: ["number", "null"] },
+            committedThisStreet: { type: ["number", "null"] },
             inHand: { type: "boolean" }
           },
-          required: ["stack","inHand"]
+          // ✅ include all keys
+          required: ["seat", "position", "stack", "committedThisStreet", "inHand"]
         }
       },
+
+      // Keep actionHistory flexible (no properties enforced); strict top-level still applies
       actionHistory: { type: "array", items: { type: "object" } }
     },
-    required: ["table","hero","players","actionHistory"]
+    // ✅ include all top-level keys
+    required: ["table", "hero", "players", "actionHistory"]
   },
   strict: true
 };
@@ -101,10 +112,11 @@ const TableStateSchema = {
 // Build the format object the Responses API expects
 const JSON_SCHEMA_FORMAT = {
   type: 'json_schema',
-  name: 'TableState',              // 👈 required at text.format.name
-  schema: TableStateSchema.schema, // reuse your schema body
+  name: 'TableState',                    // required at text.format.name
+  schema: TableStateSchema.schema,       // the schema body above
   strict: true
 };
+
 
 
 // ---------- function entry ----------
