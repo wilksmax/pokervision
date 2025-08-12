@@ -1,10 +1,10 @@
 // functions/api/analyze.js
 //
-// Drop-in replacement for your Cloudflare Pages Function.
-// - Uses gpt-4o + JSON schema for strict extraction
+// Cloudflare Pages Function:
+// - Uses gpt-4o with json_schema via text.format for strict extraction
 // - Uses "computer_screenshot" modality
-// - Adds a self-check correction pass
-// - Falls back gracefully when OpenAI returns text instead of parsed JSON
+// - Self-check correction pass on gpt-4o-mini
+// - Robust output parsing for Responses API
 
 // ---------- helpers ----------
 function parseJsonLoose(s) {
@@ -101,7 +101,7 @@ const TableStateSchema = {
 // ---------- function entry ----------
 export async function onRequestPost(context) {
   try {
-    const { env, request } = context; // OPENAI_API_KEY must be defined in Pages → Settings → Environment variables
+    const { env, request } = context; // Set OPENAI_API_KEY in Pages → Settings → Environment variables
     const form = await request.formData();
     const file = form.get('image');
     if (!file) {
@@ -116,11 +116,11 @@ export async function onRequestPost(context) {
     const b64 = btoa(binary);
     const dataUrl = `data:${file.type};base64,${b64}`;
 
-    // ---------- 1) Vision extraction (STRICT with schema) ----------
+    // ---------- 1) Vision extraction (STRICT with schema via text.format) ----------
     const extractionReq = {
       model: 'gpt-4o',
       temperature: 0,
-      response_format: { type: 'json_schema', json_schema: TableStateSchema },
+      text: { format: { type: 'json_schema', json_schema: TableStateSchema } },
       input: [
         {
           role: 'system',
@@ -165,7 +165,7 @@ Skin rules:
 
     const exJson = await exRes.json();
 
-    // Prefer structured output when response_format is json_schema
+    // Prefer structured output when using json_schema format
     let state = exJson.output_parsed;
     if (!state) {
       const raw = getOutputText(exJson);
@@ -177,11 +177,11 @@ Skin rules:
       return new Response(JSON.stringify({ error: 'Incomplete extraction', state }), { status: 422 });
     }
 
-    // ---------- 1b) Self-check / correction pass ----------
+    // ---------- 1b) Self-check / correction pass (also uses json_schema via text.format) ----------
     const correctionReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
-      response_format: { type: 'json_schema', json_schema: TableStateSchema },
+      text: { format: { type: 'json_schema', json_schema: TableStateSchema } },
       input: [
         { role: 'system', content: [
           { type: 'input_text', text:
@@ -216,7 +216,7 @@ Return corrected JSON only.` }
       if (correctedState) state = correctedState;
     }
 
-    // ---------- 2) Strategy recommendation ----------
+    // ---------- 2) Strategy recommendation (textual JSON, no schema needed) ----------
     const strategyReq = {
       model: 'gpt-4o-mini',
       temperature: 0,
@@ -234,7 +234,7 @@ Rules:
 - If bet/raise, include explicit size: BB if blinds known; else 0.33x/0.5x/0.66x pot.
 - Cite numbers from the state in notes.
 - If key fields are null, give a safe default and flag uncertainty.
-- Do NOT wrap JSON in code fences. Output JSON only.`
+- Do NOT wrap the JSON in code fences. Output JSON only.`
             }
           ]
         },
